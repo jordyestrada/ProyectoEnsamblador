@@ -1,0 +1,851 @@
+﻿.model small
+.stack 100h
+
+.data
+    mapa db '##########'
+         db '#.GTCGT..#'
+         db '#..++~+C.#'
+         db '#.T++~++T#'
+         db '#G.++O+.G#'
+         db '#..T++TC.#'
+         db '#..++..E.#'
+         db '##########'
+    
+    px db 2
+    py db 6
+    tecla db 0
+    fin db 0
+    redraw db 1
+    
+    ; Sistema de inventario
+    gold_count db 0
+    crystals_count db 0
+    treasures_count db 0
+    
+    ; Objetivos (necesitamos 2 de cada uno)
+    gold_needed db 2
+    crystals_needed db 2
+    treasures_needed db 2
+    
+    MAPA_ANCHO equ 10
+    MAPA_ALTO equ 8
+    TILE_SIZE equ 16
+
+.code
+start:
+    mov ax, @data
+    mov ds, ax
+    
+    call init_screen
+    
+game_loop:
+    cmp byte ptr [redraw], 1
+    jne skip_draw
+    
+    call clear_and_draw
+    mov byte ptr [redraw], 0
+
+skip_draw:
+    call get_key_nowait
+    cmp byte ptr [tecla], 0
+    je game_loop
+    
+    call move_player
+    call check_item_collection
+    call check_win
+    
+    cmp byte ptr [fin], 1
+    jne game_loop
+    
+    call restore_screen
+    mov ax, 4c00h
+    int 21h
+
+init_screen proc
+    mov ax, 0013h
+    int 10h
+    ret
+init_screen endp
+
+clear_and_draw proc
+    ; Limpiar pantalla usando memoria VGA directamente
+    call clear_vga_screen
+    
+    ; Dibujar HUD
+    call draw_hud
+    
+    ; Dibujar mapa completo
+    call draw_full_map
+    
+    ; Dibujar jugador encima
+    call draw_player
+    ret
+clear_and_draw endp
+
+clear_vga_screen proc
+    push ax
+    push cx
+    push di
+    push es
+    
+    ; Acceso directo a memoria VGA
+    mov ax, 0A000h
+    mov es, ax
+    mov di, 0
+    mov cx, 32000       ; 320x200 / 2 words
+    mov ax, 0           ; Color negro
+    rep stosw
+    
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+clear_vga_screen endp
+
+draw_hud proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    
+    ; Dibujar barra superior del HUD
+    mov dx, 0
+hud_row_loop:
+    mov cx, 0
+hud_col_loop:
+    mov ah, 0Ch
+    mov al, 8           ; Gris oscuro
+    int 10h
+    inc cx
+    cmp cx, 320
+    jl hud_col_loop
+    inc dx
+    cmp dx, 25
+    jl hud_row_loop
+    
+    ; Dibujar iconos y contadores
+    ; Icono de oro
+    mov cx, 10
+    mov dx, 5
+    call draw_gold_icon
+    
+    ; Contador de oro
+    mov al, byte ptr [gold_count]
+    mov cx, 30
+    mov dx, 10
+    call draw_digit
+    
+    ; Icono de cristal
+    mov cx, 60
+    mov dx, 5
+    call draw_crystal_icon
+    
+    ; Contador de cristales
+    mov al, byte ptr [crystals_count]
+    mov cx, 80
+    mov dx, 10
+    call draw_digit
+    
+    ; Icono de tesoro
+    mov cx, 110
+    mov dx, 5
+    call draw_treasure_icon
+    
+    ; Contador de tesoros
+    mov al, byte ptr [treasures_count]
+    mov cx, 130
+    mov dx, 10
+    call draw_digit
+    
+    ; Indicador de objetivo
+    mov cx, 180
+    mov dx, 10
+    call draw_objective_status
+    
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_hud endp
+
+draw_gold_icon proc
+    push ax
+    push bx
+    push si
+    
+    mov bx, 0
+gold_y:
+    mov si, 0
+gold_x:
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 14          ; Amarillo
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    inc si
+    cmp si, 12
+    jl gold_x
+    inc bx
+    cmp bx, 8
+    jl gold_y
+    
+    pop si
+    pop bx
+    pop ax
+    ret
+draw_gold_icon endp
+
+draw_crystal_icon proc
+    push ax
+    push bx
+    push si
+    
+    mov bx, 0
+crystal_y:
+    mov si, 0
+crystal_x:
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 3           ; Cyan
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    inc si
+    cmp si, 12
+    jl crystal_x
+    inc bx
+    cmp bx, 8
+    jl crystal_y
+    
+    pop si
+    pop bx
+    pop ax
+    ret
+draw_crystal_icon endp
+
+draw_treasure_icon proc
+    push ax
+    push bx
+    push si
+    
+    mov bx, 0
+treasure_y:
+    mov si, 0
+treasure_x:
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 4           ; Rojo
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    inc si
+    cmp si, 12
+    jl treasure_x
+    inc bx
+    cmp bx, 8
+    jl treasure_y
+    
+    pop si
+    pop bx
+    pop ax
+    ret
+draw_treasure_icon endp
+
+draw_digit proc
+    ; AL = dígito (0-9)
+    ; CX, DX = posición
+    push ax
+    push bx
+    push si
+    
+    ; Dibujar dígito simple
+    mov bx, 0
+digit_y:
+    mov si, 0
+digit_x:
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 15          ; Blanco
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    inc si
+    cmp si, 8
+    jl digit_x
+    inc bx
+    cmp bx, 10
+    jl digit_y
+    
+    pop si
+    pop bx
+    pop ax
+    ret
+draw_digit endp
+
+draw_objective_status proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    
+    ; Verificar objetivos
+    mov al, byte ptr [gold_count]
+    cmp al, byte ptr [gold_needed]
+    jl obj_incomplete
+    
+    mov al, byte ptr [crystals_count]
+    cmp al, byte ptr [crystals_needed]
+    jl obj_incomplete
+    
+    mov al, byte ptr [treasures_count]
+    cmp al, byte ptr [treasures_needed]
+    jl obj_incomplete
+    
+    ; Completo - verde
+    mov al, 2
+    jmp draw_status
+
+obj_incomplete:
+    ; Incompleto - amarillo
+    mov al, 14
+
+draw_status:
+    mov bx, 0
+status_y:
+    mov si, 0
+status_x:
+    push cx
+    push dx
+    mov ah, 0Ch
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    inc si
+    cmp si, 20
+    jl status_x
+    inc bx
+    cmp bx, 8
+    jl status_y
+    
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_objective_status endp
+
+check_item_collection proc
+    push ax
+    push bx
+    push si
+    
+    ; Calcular posición en el mapa
+    mov al, byte ptr [py]
+    mov bl, MAPA_ANCHO
+    mul bl
+    xor bh, bh
+    mov bl, byte ptr [px]
+    add ax, bx
+    mov si, ax
+    
+    ; Verificar item
+    mov al, byte ptr [mapa + si]
+    
+    cmp al, 'G'
+    je collect_gold
+    cmp al, 'C'
+    je collect_crystal
+    cmp al, 'T'
+    je collect_treasure
+    jmp no_collection
+
+collect_gold:
+    inc byte ptr [gold_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+    jmp no_collection
+
+collect_crystal:
+    inc byte ptr [crystals_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+    jmp no_collection
+
+collect_treasure:
+    inc byte ptr [treasures_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+
+no_collection:
+    pop si
+    pop bx
+    pop ax
+    ret
+check_item_collection endp
+
+draw_full_map proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    
+    mov si, 0
+    mov bx, 0
+
+map_fila:
+    mov di, 0
+
+map_columna:
+    mov ax, bx
+    mov dl, TILE_SIZE
+    mul dl
+    add ax, 30          ; Offset para HUD
+    push ax
+    
+    mov ax, di
+    mov dl, TILE_SIZE
+    mul dl
+    mov cx, ax
+    pop dx
+    
+    mov al, byte ptr [mapa + si]
+    call draw_tile
+    
+    inc si
+    inc di
+    cmp di, MAPA_ANCHO
+    jl map_columna
+    
+    inc bx
+    cmp bx, MAPA_ALTO
+    jl map_fila
+    
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_full_map endp
+
+validar_movimiento proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [py]
+    mov bl, MAPA_ANCHO
+    mul bl
+    xor bh, bh
+    mov bl, byte ptr [px]
+    add ax, bx
+    mov si, ax
+    
+    mov al, byte ptr [mapa + si]
+    cmp al, '#'
+    je deshacer_movimiento
+    cmp al, '~'
+    je deshacer_movimiento
+    cmp al, 'O'
+    je deshacer_movimiento
+    
+    mov byte ptr [redraw], 1
+    jmp fin_validacion
+
+deshacer_movimiento:
+    mov al, byte ptr [tecla]
+    cmp al, 'w'
+    je deshacer_arriba
+    cmp al, 'W'
+    je deshacer_arriba
+    cmp al, 's'
+    je deshacer_abajo
+    cmp al, 'S'
+    je deshacer_abajo
+    cmp al, 'a'
+    je deshacer_izquierda
+    cmp al, 'A'
+    je deshacer_izquierda
+    cmp al, 'd'
+    je deshacer_derecha
+    cmp al, 'D'
+    je deshacer_derecha
+    jmp fin_validacion
+
+deshacer_arriba:
+    inc byte ptr [py]
+    jmp fin_validacion
+deshacer_abajo:
+    dec byte ptr [py]
+    jmp fin_validacion
+deshacer_izquierda:
+    inc byte ptr [px]
+    jmp fin_validacion
+deshacer_derecha:
+    dec byte ptr [px]
+    jmp fin_validacion
+
+fin_validacion:
+    pop si
+    pop bx
+    pop ax
+    ret
+validar_movimiento endp
+
+draw_tile proc
+    push cx
+    push dx
+    
+    cmp al, '#'
+    je color_pared
+    cmp al, '~'
+    je color_agua
+    cmp al, 'G'
+    je tile_gold
+    cmp al, 'C'
+    je tile_crystal
+    cmp al, 'T'
+    je tile_treasure
+    cmp al, 'O'
+    je tile_pozo
+    cmp al, '+'
+    je color_camino
+    cmp al, 'E'
+    je color_salida
+    mov al, 2
+    jmp dibujar_tile
+
+color_pared:
+    mov al, 6
+    jmp dibujar_tile
+color_agua:
+    mov al, 1
+    jmp dibujar_tile
+color_camino:
+    mov al, 14
+    jmp dibujar_tile
+color_salida:
+    mov al, 5
+    jmp dibujar_tile
+
+tile_gold:
+    mov al, 14
+    call dibujar_tile
+    ; Destello central
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 15
+    add cx, 8
+    add dx, 8
+    int 10h
+    pop dx
+    pop cx
+    pop dx
+    pop cx
+    ret
+
+tile_crystal:
+    mov al, 3
+    call dibujar_tile
+    ; Destello central
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 15
+    add cx, 8
+    add dx, 8
+    int 10h
+    pop dx
+    pop cx
+    pop dx
+    pop cx
+    ret
+
+tile_treasure:
+    mov al, 4
+    call dibujar_tile
+    ; Punto dorado central
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 14
+    add cx, 8
+    add dx, 8
+    int 10h
+    pop dx
+    pop cx
+    pop dx
+    pop cx
+    ret
+
+tile_pozo:
+    mov al, 7
+    call dibujar_tile
+    ; Círculo negro central
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 0
+    add cx, 6
+    add dx, 6
+    int 10h
+    add cx, 2
+    int 10h
+    add dx, 2
+    int 10h
+    sub cx, 2
+    int 10h
+    pop dx
+    pop cx
+    pop dx
+    pop cx
+    ret
+
+dibujar_tile:
+    push ax
+    push bx
+    push si
+    
+    mov bx, 0
+tile_row:
+    mov si, 0
+tile_col:
+    push ax
+    push cx
+    push dx
+    mov ah, 0Ch
+    add dx, bx
+    add cx, si
+    int 10h
+    pop dx
+    pop cx
+    pop ax
+    
+    inc si
+    cmp si, TILE_SIZE
+    jl tile_col
+    inc bx
+    cmp bx, TILE_SIZE
+    jl tile_row
+    
+    pop si
+    pop bx
+    pop ax
+    pop dx
+    pop cx
+    ret
+draw_tile endp
+
+draw_player proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    
+    mov al, byte ptr [px]
+    mov bl, TILE_SIZE
+    mul bl
+    mov cx, ax
+    
+    mov al, byte ptr [py]
+    mov bl, TILE_SIZE
+    mul bl
+    add ax, 30
+    mov dx, ax
+    
+    mov al, 12
+    mov bx, 0
+player_row:
+    mov si, 0
+player_col:
+    push ax
+    push cx
+    push dx
+    mov ah, 0Ch
+    add dx, bx
+    add cx, si
+    int 10h
+    pop dx
+    pop cx
+    pop ax
+    
+    inc si
+    cmp si, TILE_SIZE
+    jl player_col
+    
+    inc bx
+    cmp bx, TILE_SIZE
+    jl player_row
+    
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_player endp
+
+get_key_nowait proc
+    mov byte ptr [tecla], 0
+    mov ah, 01h
+    int 16h
+    jz no_key_available
+    
+    mov ah, 00h
+    int 16h
+    mov byte ptr [tecla], al
+
+no_key_available:
+    ret
+get_key_nowait endp
+
+move_player proc
+    mov al, byte ptr [tecla]
+    
+    cmp al, 27
+    je salir_juego
+    
+    cmp al, 'w'
+    je mover_arriba
+    cmp al, 'W'
+    je mover_arriba
+    
+    cmp al, 's'
+    je mover_abajo
+    cmp al, 'S'
+    je mover_abajo
+    
+    cmp al, 'a'
+    je mover_izquierda
+    cmp al, 'A'
+    je mover_izquierda
+    
+    cmp al, 'd'
+    je mover_derecha
+    cmp al, 'D'
+    je mover_derecha
+    
+    ret
+
+salir_juego:
+    mov byte ptr [fin], 1
+    ret
+
+mover_arriba:
+    cmp byte ptr [py], 0
+    je movimiento_invalido
+    dec byte ptr [py]
+    call validar_movimiento
+    ret
+
+mover_abajo:
+    cmp byte ptr [py], MAPA_ALTO-1
+    je movimiento_invalido
+    inc byte ptr [py]
+    call validar_movimiento
+    ret
+
+mover_izquierda:
+    cmp byte ptr [px], 0
+    je movimiento_invalido
+    dec byte ptr [px]
+    call validar_movimiento
+    ret
+
+mover_derecha:
+    cmp byte ptr [px], MAPA_ANCHO-1
+    je movimiento_invalido
+    inc byte ptr [px]
+    call validar_movimiento
+    ret
+
+movimiento_invalido:
+    ret
+move_player endp
+
+check_win proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [gold_count]
+    cmp al, byte ptr [gold_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [crystals_count]
+    cmp al, byte ptr [crystals_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [treasures_count]
+    cmp al, byte ptr [treasures_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [py]
+    mov bl, MAPA_ANCHO
+    mul bl
+    xor bh, bh
+    mov bl, byte ptr [px]
+    add ax, bx
+    mov si, ax
+    
+    cmp byte ptr [mapa + si], 'E'
+    jne no_ganaste
+    
+    ; Cambiar a modo texto para mensaje
+    mov ax, 0003h
+    int 10h
+    
+    mov ah, 09h
+    lea dx, mensaje_victoria
+    int 21h
+    
+    mov ah, 07h
+    int 21h
+    mov byte ptr [fin], 1
+
+no_ganaste:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+mensaje_victoria db 'FELICIDADES! Completaste la aventura! Presiona cualquier tecla...$'
+check_win endp
+
+restore_screen proc
+    mov ax, 0003h
+    int 10h
+    
+    mov ah, 01h
+    mov cx, 0607h
+    int 10h
+    ret
+restore_screen endp
+
+end start

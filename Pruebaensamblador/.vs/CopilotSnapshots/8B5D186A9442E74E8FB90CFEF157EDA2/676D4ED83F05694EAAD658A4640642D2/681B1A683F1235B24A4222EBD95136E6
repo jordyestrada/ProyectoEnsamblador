@@ -1,0 +1,821 @@
+﻿.model small
+.stack 100h
+
+.data
+    ; Mapa expandido a 20x15 tiles (requisito mínimo)
+    mapa db '####################'
+         db '#.GTCGT..#.GTCGT..#'
+         db '#..++~+C.#..++~+C.#'
+         db '#.T++~++T#.T++~++T#'
+         db '#G.++O+.G#G.++O+.G#'
+         db '#..T++TC.#..T++TC.#'
+         db '#..++..E.#..++....#'
+         db '####################'
+         db '#GTCGT..##..GTCGT.#'
+         db '#.++~+C.##.++~+C..#'
+         db '#T++~++T##T++~++T.#'
+         db '#.++O+.G##G.++O+..#'
+         db '#.T++TC.##..T++TC.#'
+         db '#.++....##..++..E.#'
+         db '####################'
+    
+    px db 2
+    py db 6
+    tecla db 0
+    fin db 0
+    redraw db 1
+    
+    ; Viewport y cámara
+    camera_x db 0
+    camera_y db 0
+    VIEWPORT_WIDTH equ 160
+    VIEWPORT_HEIGHT equ 100
+    VIEWPORT_TILES_X equ 10
+    VIEWPORT_TILES_Y equ 6
+    
+    ; Sistema de inventario
+    gold_count db 0
+    crystals_count db 0
+    treasures_count db 0
+    
+    ; Objetivos
+    gold_needed db 2
+    crystals_needed db 2
+    treasures_needed db 2
+    
+    MAPA_ANCHO equ 20
+    MAPA_ALTO equ 15
+    TILE_SIZE equ 16
+    
+    ; Buffer para doble búfer (simplified for EGA)
+    screen_buffer db 8000 dup(0)  ; Buffer para EGA 640x350
+    
+    ; Sprites 16x16 para EGA (usando 4 bits por pixel)
+    player_sprite db 16 dup(0FFh, 0FFh, 0FFh, 0FFh, 0C3h, 0C3h, 0C3h, 0C3h)
+    gold_sprite   db 16 dup(0F0h, 0F0h, 0FFh, 0FFh, 0F0h, 0F0h, 00h, 00h)
+    crystal_sprite db 16 dup(33h, 33h, 0FFh, 0FFh, 33h, 33h, 00h, 00h)
+    treasure_sprite db 16 dup(44h, 44h, 0FFh, 0FFh, 44h, 44h, 00h, 00h)
+
+.code
+start:
+    mov ax, @data
+    mov ds, ax
+    
+    call init_ega_screen
+    call setup_ega_palette
+    
+game_loop:
+    cmp byte ptr [redraw], 1
+    jne skip_draw
+    
+    call update_camera
+    call clear_buffer
+    call draw_hud_to_buffer
+    call draw_viewport_to_buffer
+    call draw_player_to_buffer
+    call copy_buffer_to_screen
+    mov byte ptr [redraw], 0
+
+skip_draw:
+    call get_key_nowait
+    cmp byte ptr [tecla], 0
+    je game_loop
+    
+    call move_player
+    call check_item_collection
+    call check_win
+    
+    cmp byte ptr [fin], 1
+    jne game_loop
+    
+    call restore_screen
+    mov ax, 4c00h
+    int 21h
+
+init_ega_screen proc
+    ; Modo EGA 640x350, 16 colores
+    mov ax, 0010h
+    int 10h
+    ret
+init_ega_screen endp
+
+setup_ega_palette proc
+    ; Configurar paleta EGA estándar
+    ; Los 16 colores EGA están predefinidos, pero podemos ajustar algunos
+    push ax
+    push dx
+    
+    ; Configurar paleta usando BIOS
+    mov ax, 1000h       ; Set palette register
+    mov bl, 0           ; Color 0 = Negro
+    mov bh, 0
+    int 10h
+    
+    mov bl, 1           ; Color 1 = Azul
+    mov bh, 1
+    int 10h
+    
+    mov bl, 2           ; Color 2 = Verde
+    mov bh, 2
+    int 10h
+    
+    mov bl, 3           ; Color 3 = Cyan
+    mov bh, 3
+    int 10h
+    
+    mov bl, 4           ; Color 4 = Rojo
+    mov bh, 4
+    int 10h
+    
+    mov bl, 5           ; Color 5 = Magenta
+    mov bh, 5
+    int 10h
+    
+    mov bl, 6           ; Color 6 = Marrón
+    mov bh, 20h         ; Marrón oscuro
+    int 10h
+    
+    mov bl, 7           ; Color 7 = Gris claro
+    mov bh, 7
+    int 10h
+    
+    mov bl, 8           ; Color 8 = Gris oscuro
+    mov bh, 38h
+    int 10h
+    
+    mov bl, 9           ; Color 9 = Azul claro
+    mov bh, 39h
+    int 10h
+    
+    mov bl, 10          ; Color 10 = Verde claro
+    mov bh, 3Ah
+    int 10h
+    
+    mov bl, 11          ; Color 11 = Cyan claro
+    mov bh, 3Bh
+    int 10h
+    
+    mov bl, 12          ; Color 12 = Rojo claro
+    mov bh, 3Ch
+    int 10h
+    
+    mov bl, 13          ; Color 13 = Magenta claro
+    mov bh, 3Dh
+    int 10h
+    
+    mov bl, 14          ; Color 14 = Amarillo
+    mov bh, 3Eh
+    int 10h
+    
+    mov bl, 15          ; Color 15 = Blanco
+    mov bh, 3Fh
+    int 10h
+    
+    pop dx
+    pop ax
+    ret
+setup_ega_palette endp
+
+update_camera proc
+    push ax
+    push bx
+    
+    ; Centrar cámara en el jugador
+    mov al, byte ptr [px]
+    sub al, VIEWPORT_TILES_X / 2
+    cmp al, 0
+    jge camera_x_positive
+    mov al, 0
+camera_x_positive:
+    mov bl, MAPA_ANCHO - VIEWPORT_TILES_X
+    cmp al, bl
+    jle camera_x_valid
+    mov al, bl
+camera_x_valid:
+    mov byte ptr [camera_x], al
+    
+    ; Centrar cámara en Y
+    mov al, byte ptr [py]
+    sub al, VIEWPORT_TILES_Y / 2
+    cmp al, 0
+    jge camera_y_positive
+    mov al, 0
+camera_y_positive:
+    mov bl, MAPA_ALTO - VIEWPORT_TILES_Y
+    cmp al, bl
+    jle camera_y_valid
+    mov al, bl
+camera_y_valid:
+    mov byte ptr [camera_y], al
+    
+    pop bx
+    pop ax
+    ret
+update_camera endp
+
+clear_buffer proc
+    push ax
+    push cx
+    push di
+    push es
+    
+    ; Limpiar buffer con color negro
+    mov ax, ds
+    mov es, ax
+    lea di, screen_buffer
+    mov cx, 4000        ; 8000 bytes / 2
+    mov ax, 0
+    rep stosw
+    
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+clear_buffer endp
+
+draw_hud_to_buffer proc
+    push ax
+    push bx
+    push cx
+    push dx
+    
+    ; Dibujar HUD en la parte superior del buffer
+    ; Área del HUD: 160x20 píxeles
+    
+    ; Mostrar contadores simples
+    mov ax, 0           ; Posición Y del HUD
+    mov bx, 10          ; Posición X para oro
+    mov cl, byte ptr [gold_count]
+    call draw_number_to_buffer
+    
+    mov bx, 50          ; Posición X para cristales
+    mov cl, byte ptr [crystals_count]
+    call draw_number_to_buffer
+    
+    mov bx, 90          ; Posición X para tesoros
+    mov cl, byte ptr [treasures_count]
+    call draw_number_to_buffer
+    
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_hud_to_buffer endp
+
+draw_number_to_buffer proc
+    ; AX = Y, BX = X, CL = número
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    
+    ; Dibujar número simple de 8x8 en buffer
+    mov si, 0
+number_y:
+    push si
+    mov si, 0
+number_x:
+    push ax
+    push bx
+    
+    ; Calcular posición en buffer
+    mov dx, ax
+    add dx, si          ; Y + offset Y
+    mov ax, 80          ; Ancho de línea en bytes (640/8)
+    mul dx
+    mov dx, bx
+    add dx, si          ; X + offset X
+    shr dx, 3           ; Dividir por 8 (8 píxeles por byte)
+    add ax, dx
+    mov si, ax
+    
+    ; Dibujar pixel en buffer
+    mov byte ptr [screen_buffer + si], 15  ; Color blanco
+    
+    pop bx
+    pop ax
+    inc si
+    cmp si, 8
+    jl number_x
+    pop si
+    inc si
+    cmp si, 8
+    jl number_y
+    
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_number_to_buffer endp
+
+draw_viewport_to_buffer proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    
+    mov bl, byte ptr [camera_y]
+    mov bh, 0
+    mov si, 0           ; Contador Y del viewport
+
+viewport_y_loop:
+    mov cl, byte ptr [camera_x]
+    mov ch, 0
+    mov di, 0           ; Contador X del viewport
+
+viewport_x_loop:
+    ; Calcular posición en el mapa
+    push si
+    push di
+    mov al, bl
+    add al, byte ptr [camera_y]
+    mov ah, MAPA_ANCHO
+    mul ah
+    add al, cl
+    add al, byte ptr [camera_x]
+    mov si, ax
+    
+    ; Obtener tile del mapa
+    mov al, byte ptr [mapa + si]
+    
+    ; Calcular posición en viewport
+    pop di
+    pop si
+    mov ah, di
+    mov al, TILE_SIZE
+    mul ah
+    mov cx, ax          ; X en viewport
+    
+    mov ah, si
+    mov al, TILE_SIZE
+    mul ah
+    add ax, 20          ; Offset Y para HUD
+    mov dx, ax          ; Y en viewport
+    
+    ; Dibujar tile
+    call draw_tile_to_buffer
+    
+    inc di
+    inc cl
+    cmp di, VIEWPORT_TILES_X
+    jl viewport_x_loop
+    
+    inc si
+    inc bl
+    cmp si, VIEWPORT_TILES_Y
+    jl viewport_y_loop
+    
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_viewport_to_buffer endp
+
+draw_tile_to_buffer proc
+    ; AL = tipo de tile, CX = X, DX = Y en viewport
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    
+    ; Determinar color según tipo de tile
+    cmp al, '#'
+    je tile_wall_color
+    cmp al, '~'
+    je tile_water_color
+    cmp al, 'G'
+    je tile_gold_color
+    cmp al, 'C'
+    je tile_crystal_color
+    cmp al, 'T'
+    je tile_treasure_color
+    cmp al, 'O'
+    je tile_pit_color
+    cmp al, '+'
+    je tile_path_color
+    cmp al, 'E'
+    je tile_exit_color
+    
+    ; Default
+    mov al, 8           ; Gris oscuro
+    jmp draw_tile_pixels
+
+tile_wall_color:
+    mov al, 7           ; Gris claro
+    jmp draw_tile_pixels
+tile_water_color:
+    mov al, 1           ; Azul
+    jmp draw_tile_pixels
+tile_gold_color:
+    mov al, 14          ; Amarillo
+    jmp draw_tile_pixels
+tile_crystal_color:
+    mov al, 3           ; Cyan
+    jmp draw_tile_pixels
+tile_treasure_color:
+    mov al, 4           ; Rojo
+    jmp draw_tile_pixels
+tile_pit_color:
+    mov al, 0           ; Negro
+    jmp draw_tile_pixels
+tile_path_color:
+    mov al, 6           ; Marrón
+    jmp draw_tile_pixels
+tile_exit_color:
+    mov al, 5           ; Magenta
+    jmp draw_tile_pixels
+
+draw_tile_pixels:
+    ; Dibujar tile 16x16 en buffer
+    mov bx, 0
+tile_y:
+    push bx
+    mov bx, 0
+tile_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    
+    ; Calcular posición en buffer (simplificado)
+    mov si, dx
+    add si, bx          ; Y + tile_y
+    mov ax, 80
+    mul si
+    mov si, cx
+    add si, bx          ; X + tile_x
+    shr si, 3           ; /8 píxeles por byte
+    add ax, si
+    mov si, ax
+    
+    ; Escribir color en buffer (simplificado para EGA)
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov byte ptr [screen_buffer + si], al
+    
+    inc bx
+    cmp bx, TILE_SIZE
+    jl tile_x
+    pop bx
+    inc bx
+    cmp bx, TILE_SIZE
+    jl tile_y
+    
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_tile_to_buffer endp
+
+draw_player_to_buffer proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    
+    ; Calcular posición del jugador en viewport
+    mov al, byte ptr [px]
+    sub al, byte ptr [camera_x]
+    mov bl, TILE_SIZE
+    mul bl
+    mov cx, ax          ; X en viewport
+    
+    mov al, byte ptr [py]
+    sub al, byte ptr [camera_y]
+    mov bl, TILE_SIZE
+    mul bl
+    add ax, 20          ; Offset Y para HUD
+    mov dx, ax          ; Y en viewport
+    
+    ; Dibujar jugador como sprite 16x16
+    mov al, 12          ; Color rojo claro
+    mov bx, 0
+player_y:
+    push bx
+    mov bx, 0
+player_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    
+    ; Calcular posición en buffer
+    mov si, dx
+    add si, bx
+    mov ax, 80
+    mul si
+    mov si, cx
+    add si, bx
+    shr si, 3
+    add ax, si
+    mov si, ax
+    
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov byte ptr [screen_buffer + si], al
+    
+    inc bx
+    cmp bx, TILE_SIZE
+    jl player_x
+    pop bx
+    inc bx
+    cmp bx, TILE_SIZE
+    jl player_y
+    
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_player_to_buffer endp
+
+copy_buffer_to_screen proc
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    
+    ; Copiar buffer a memoria de video EGA
+    mov ax, 0A000h
+    mov es, ax
+    mov di, 0
+    mov si, offset screen_buffer
+    mov cx, 4000        ; 8000 bytes / 2 words
+    rep movsw
+    
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+copy_buffer_to_screen endp
+
+check_item_collection proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [py]
+    mov bl, MAPA_ANCHO
+    mul bl
+    mov bl, byte ptr [px]
+    add al, bl
+    mov si, ax
+    
+    mov al, byte ptr [mapa + si]
+    
+    cmp al, 'G'
+    je collect_gold
+    cmp al, 'C'
+    je collect_crystal
+    cmp al, 'T'
+    je collect_treasure
+    jmp no_collection
+
+collect_gold:
+    inc byte ptr [gold_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+    jmp no_collection
+
+collect_crystal:
+    inc byte ptr [crystals_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+    jmp no_collection
+
+collect_treasure:
+    inc byte ptr [treasures_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+
+no_collection:
+    pop si
+    pop bx
+    pop ax
+    ret
+check_item_collection endp
+
+get_key_nowait proc
+    mov byte ptr [tecla], 0
+    mov ah, 01h
+    int 16h
+    jz no_key_available
+    
+    mov ah, 00h
+    int 16h
+    mov byte ptr [tecla], al
+
+no_key_available:
+    ret
+get_key_nowait endp
+
+move_player proc
+    mov al, byte ptr [tecla]
+    
+    cmp al, 27
+    je salir_juego
+    
+    cmp al, 'w'
+    je mover_arriba
+    cmp al, 'W'
+    je mover_arriba
+    
+    cmp al, 's'
+    je mover_abajo
+    cmp al, 'S'
+    je mover_abajo
+    
+    cmp al, 'a'
+    je mover_izquierda
+    cmp al, 'A'
+    je mover_izquierda
+    
+    cmp al, 'd'
+    je mover_derecha
+    cmp al, 'D'
+    je mover_derecha
+    
+    ret
+
+salir_juego:
+    mov byte ptr [fin], 1
+    ret
+
+mover_arriba:
+    cmp byte ptr [py], 0
+    je movimiento_invalido
+    dec byte ptr [py]
+    call validar_movimiento
+    ret
+
+mover_abajo:
+    cmp byte ptr [py], MAPA_ALTO-1
+    je movimiento_invalido
+    inc byte ptr [py]
+    call validar_movimiento
+    ret
+
+mover_izquierda:
+    cmp byte ptr [px], 0
+    je movimiento_invalido
+    dec byte ptr [px]
+    call validar_movimiento
+    ret
+
+mover_derecha:
+    cmp byte ptr [px], MAPA_ANCHO-1
+    je movimiento_invalido
+    inc byte ptr [px]
+    call validar_movimiento
+    ret
+
+movimiento_invalido:
+    ret
+move_player endp
+
+validar_movimiento proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [py]
+    mov bl, MAPA_ANCHO
+    mul bl
+    mov bl, byte ptr [px]
+    add al, bl
+    mov si, ax
+    
+    mov al, byte ptr [mapa + si]
+    cmp al, '#'
+    je deshacer_movimiento
+    cmp al, '~'
+    je deshacer_movimiento
+    cmp al, 'O'
+    je deshacer_movimiento
+    
+    mov byte ptr [redraw], 1
+    jmp fin_validacion
+
+deshacer_movimiento:
+    mov al, byte ptr [tecla]
+    cmp al, 'w'
+    je deshacer_arriba
+    cmp al, 'W'
+    je deshacer_arriba
+    cmp al, 's'
+    je deshacer_abajo
+    cmp al, 'S'
+    je deshacer_abajo
+    cmp al, 'a'
+    je deshacer_izquierda
+    cmp al, 'A'
+    je deshacer_izquierda
+    cmp al, 'd'
+    je deshacer_derecha
+    cmp al, 'D'
+    je deshacer_derecha
+    jmp fin_validacion
+
+deshacer_arriba:
+    inc byte ptr [py]
+    jmp fin_validacion
+deshacer_abajo:
+    dec byte ptr [py]
+    jmp fin_validacion
+deshacer_izquierda:
+    inc byte ptr [px]
+    jmp fin_validacion
+deshacer_derecha:
+    dec byte ptr [px]
+    jmp fin_validacion
+
+fin_validacion:
+    pop si
+    pop bx
+    pop ax
+    ret
+validar_movimiento endp
+
+check_win proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [gold_count]
+    cmp al, byte ptr [gold_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [crystals_count]
+    cmp al, byte ptr [crystals_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [treasures_count]
+    cmp al, byte ptr [treasures_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [py]
+    mov bl, MAPA_ANCHO
+    mul bl
+    mov bl, byte ptr [px]
+    add al, bl
+    mov si, ax
+    
+    cmp byte ptr [mapa + si], 'E'
+    jne no_ganaste
+    
+    ; Cambiar a modo texto
+    mov ax, 0003h
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_victoria
+    int 21h
+    
+    mov ah, 07h
+    int 21h
+    mov byte ptr [fin], 1
+
+no_ganaste:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+mensaje_victoria db 'FELICIDADES! Has completado el juego! Presiona cualquier tecla...$'
+check_win endp
+
+restore_screen proc
+    mov ax, 0003h
+    int 10h
+    
+    mov ah, 01h
+    mov cx, 0607h
+    int 10h
+    ret
+restore_screen endp
+
+end start
