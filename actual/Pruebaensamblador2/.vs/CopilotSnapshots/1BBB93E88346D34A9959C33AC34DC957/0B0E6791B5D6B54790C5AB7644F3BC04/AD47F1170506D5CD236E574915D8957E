@@ -1,0 +1,74 @@
+﻿=====================================================
+ARCHIVOS DEL PROYECTO
+=====================================================
+
+ARCHIVOS PRINCIPALES (Necesarios para compilar)
+------------------------------------------------
+
+juego.asm
+  → Archivo principal con la lógica del juego
+  → Incluye doble buffer y game loop
+  → Tamaño: 17,221 bytes
+
+mapa.map
+  → Datos del mapa 20x15 tiles
+  → Constantes del mapa
+  → Variables de cámara
+  → Tamaño: 1,061 bytes
+
+personajes.spr
+  → Sprites de todos los tiles y personaje
+  → Funciones de dibujo y animación
+  → Tamaño: 20,421 bytes
+
+DOCUMENTACIÓN
+-------------
+
+README.txt
+  → Guía rápida del usuario
+  → Cómo compilar y jugar
+  → Controles y objetivo
+
+DOCUMENTACION_TECNICA.txt
+  → Explicación del doble buffer
+  → Detalles de implementación
+  → Cómo modificar el juego
+
+HERRAMIENTAS
+------------
+
+tasm_assistant.py
+  → Script de Python para compilar
+  → Copia automáticamente archivos .map y .spr
+  → Ejecuta en DOSBox
+
+BACKUP
+------
+
+juego_original_backup.asm
+  → Versión original del juego (1 archivo)
+  → NO modificar - es tu respaldo
+
+=====================================================
+CÓMO USAR
+=====================================================
+
+1. COMPILAR Y EJECUTAR:
+   python tasm_assistant.py juego.asm
+
+2. EDITAR MAPA:
+   - Abre mapa.map
+   - Modifica los caracteres
+   - Compila de nuevo
+
+3. EDITAR SPRITES:
+   - Abre personajes.spr
+   - Modifica los procedimientos de dibujo
+   - Compila de nuevo
+
+4. CAMBIAR LÓGICA:
+   - Abre juego.asm
+   - Modifica la lógica del juego
+   - Compila de nuevo
+
+=====================================================

@@ -1,0 +1,51 @@
+=====================================================
+CONFIGURACION ACTUAL DEL PROYECTO
+=====================================================
+
+ARCHIVOS DEL PROYECTO:
+---------------------
+? juego.asm (17,221 bytes)
+? mapa.inc (1,061 bytes) 
+? personajes.inc (20,421 bytes)
+
+INCLUDES EN JUEGO.ASM:
+----------------------
+Linea 6:  include mapa.inc
+Linea 9:  include personajes.inc
+
+ARCHIVOS COPIADOS A C:\TASM\:
+-----------------------------
+? mapa.inc
+? personajes.inc
+
+SCRIPT USADO:
+-------------
+tasm_assistant.py (SIN MODIFICAR del original del profesor)
+- Solo copia archivos: .inc, .h, .mac
+- Copia todo C:\TASM al directorio temporal
+- Los archivos .inc en C:\TASM se copian automaticamente
+
+COMANDO DE COMPILACION:
+-----------------------
+python tasm_assistant.py juego.asm
+
+ESTADO:
+-------
+? Falla al ensamblar
+El script copia los archivos correctamente
+TASM encuentra juego.asm
+Pero hay un error en el ensamblado
+
+NECESITAMOS SABER:
+------------------
+¿Que error exacto muestra TASM en DOSBox?
+
+Ejecuta: compilar.bat
+Y observa la ventana de DOSBox que se abre.
+
+El error sera algo como:
+  **Fatal** juego.asm(XX) mensaje de error...
+  o
+  **Error** juego.asm(XX) mensaje de error...
+
+=====================================================

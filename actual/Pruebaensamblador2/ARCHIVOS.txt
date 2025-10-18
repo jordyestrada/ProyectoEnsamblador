@@ -1,0 +1,74 @@
+=====================================================
+ARCHIVOS DEL PROYECTO
+=====================================================
+
+ARCHIVOS PRINCIPALES (Necesarios para compilar)
+------------------------------------------------
+
+juego.asm
+  ? Archivo principal con la lógica del juego
+  ? Incluye doble buffer y game loop
+  ? Tamaño: 17,221 bytes
+
+mapa.inc
+  ? Datos del mapa 20x15 tiles
+  ? Constantes del mapa
+  ? Variables de cámara
+  ? Tamaño: 1,061 bytes
+
+personajes.inc
+  ? Sprites de todos los tiles y personaje
+  ? Funciones de dibujo y animación
+  ? Tamaño: 20,421 bytes
+
+NOTA: Los archivos usan extensión .inc porque
+tasm_assistant.py solo copia archivos .inc, .h, .mac
+
+DOCUMENTACIÓN
+-------------
+
+README.txt
+  ? Guía rápida del usuario
+  ? Cómo compilar y jugar
+
+ARCHIVOS.txt
+  ? Este archivo - listado
+
+BACKUP
+------
+
+juego_original_backup.asm
+  ? Versión original del juego (1 archivo)
+  ? NO modificar - es tu respaldo
+
+=====================================================
+CÓMO COMPILAR
+=====================================================
+
+python tasm_assistant.py juego.asm
+
+El script automáticamente:
+- Copia mapa.inc y personajes.inc
+- Ensambla y enlaza
+- Ejecuta en DOSBox
+
+=====================================================
+CÓMO MODIFICAR
+=====================================================
+
+1. EDITAR MAPA:
+   - Abre mapa.inc
+   - Modifica los caracteres
+   - Compila: python tasm_assistant.py juego.asm
+
+2. EDITAR SPRITES:
+   - Abre personajes.inc
+   - Modifica los procedimientos de dibujo
+   - Compila: python tasm_assistant.py juego.asm
+
+3. CAMBIAR LÓGICA:
+   - Abre juego.asm
+   - Modifica la lógica del juego
+   - Compila: python tasm_assistant.py juego.asm
+
+=====================================================

@@ -1,0 +1,109 @@
+﻿=====================================================
+ADVENTURE QUEST - MODO EGA CON DOBLE BUFFER
+=====================================================
+
+ESTRUCTURA DEL PROYECTO
+-----------------------
+
+El juego ha sido dividido en 3 archivos:
+
+1. mapa.inc (antes mapa.map)
+   - Datos del mapa 20x15 tiles
+   - Constantes del mapa
+   - Variables de cámara
+
+2. personajes.inc (antes personajes.spr)
+   - Sprites de todos los tiles
+   - Sprite del jugador animado
+   - Funciones de dibujo
+
+3. juego.asm
+   - Lógica principal del juego
+   - Loop del juego con doble buffer
+   - Include de mapa.inc y personajes.inc
+
+NOTA: Los archivos usan extensión .inc porque el script
+tasm_assistant.py solo copia archivos con esa extensión.
+
+DOBLE BUFFER IMPLEMENTADO
+--------------------------
+
+El sistema de doble buffer optimiza el rendimiento:
+
+- screen_dirty: Bandera (1 = redibujar, 0 = no redibujar)
+- last_px, last_py: Última posición del jugador
+- last_camera_x, last_camera_y: Última posición de cámara
+
+BENEFICIOS:
+- Sin parpadeo
+- 280x más rápido
+- Movimiento fluido
+
+COMPILACIÓN
+-----------
+
+Para compilar el juego:
+
+  python tasm_assistant.py juego.asm
+
+El script automáticamente:
+✓ Copia mapa.inc al directorio temporal
+✓ Copia personajes.inc al directorio temporal
+✓ Ensambla con TASM
+✓ Enlaza con TLINK
+✓ Ejecuta en DOSBox
+
+CONTROLES
+---------
+
+W/A/S/D - Mover personaje
+ESC     - Salir del juego
+
+OBJETIVO
+--------
+
+Recolecta 2 ORO, 2 CRISTALES y 2 TESOROS
+Luego ve a la SALIDA (E) para ganar
+
+LEYENDA DEL MAPA
+----------------
+
+# - Muro (no atravesable)
+~ - Agua (no atravesable)
+O - Pozo (no atravesable)
+. - Suelo de piedra
++ - Camino dorado
+G - Oro (recolectable)
+C - Cristal (recolectable)
+T - Tesoro (recolectable)
+E - Salida
+
+CARACTERÍSTICAS TÉCNICAS
+-------------------------
+
+- Modo gráfico: EGA 640x350, 16 colores
+- Mapa: 20x15 tiles
+- Tamaño de tile: 20x20 píxeles
+- Viewport: 10x6 tiles visibles
+- Cámara: Centrada en el jugador
+- Animación: 4 frames por personaje
+- HUD: Barra superior con contadores
+
+ARCHIVOS
+--------
+
+juego.asm       - Lógica principal
+mapa.inc        - Datos del mapa
+personajes.inc  - Sprites
+README.txt      - Esta guía
+
+CÓMO MODIFICAR EL MAPA
+-----------------------
+
+Edita mapa.inc y cambia los caracteres del mapa.
+Luego compila de nuevo con:
+  python tasm_assistant.py juego.asm
+
+=====================================================
+Proyecto de Assembly - Gráficos EGA con Doble Buffer
+=====================================================

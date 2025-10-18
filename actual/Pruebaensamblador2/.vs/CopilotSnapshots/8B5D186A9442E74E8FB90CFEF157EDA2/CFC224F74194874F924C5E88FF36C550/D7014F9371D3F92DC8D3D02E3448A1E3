@@ -1,0 +1,1179 @@
+﻿.model small
+.stack 100h
+
+.data
+    ; Mapa expandido a 20x15 tiles (requisito mínimo)
+    mapa db '####################'
+         db '#.GTCGT..#.GTCGT..#'
+         db '#..++~+C.#..++~+C.#'
+         db '#.T++~++T#.T++~++T#'
+         db '#G.++O+.G#G.++O+.G#'
+         db '#..T++TC.#..T++TC.#'
+         db '#..++..E.#..++....#'
+         db '####################'
+         db '#GTCGT..##..GTCGT.#'
+         db '#.++~+C.##.++~+C..#'
+         db '#T++~++T##T++~++T.#'
+         db '#.++O+.G##G.++O+..#'
+         db '#.T++TC.##..T++TC.#'
+         db '#.++....##..++..E.#'
+         db '####################'
+    
+    px db 2
+    py db 1
+    tecla db 0
+    fin db 0
+    redraw db 1
+    
+    ; Viewport y cámara
+    camera_x db 0
+    camera_y db 0
+    VIEWPORT_WIDTH equ 160
+    VIEWPORT_HEIGHT equ 100
+    VIEWPORT_TILES_X equ 10
+    VIEWPORT_TILES_Y equ 6
+    VIEWPORT_TILES_X_HALF equ 5
+    VIEWPORT_TILES_Y_HALF equ 3
+    
+    ; Sistema de inventario
+    gold_count db 0
+    crystals_count db 0
+    treasures_count db 0
+    
+    ; Objetivos
+    gold_needed db 2
+    crystals_needed db 2
+    treasures_needed db 2
+    
+    MAPA_ANCHO equ 20
+    MAPA_ALTO equ 15
+    TILE_SIZE equ 16
+    
+    ; Sistema de animación del personaje
+    player_direction db 0    ; 0=abajo, 1=arriba, 2=izquierda, 3=derecha
+    player_frame db 0        ; Frame actual de animación (0-3)
+    animation_counter db 0   ; Contador para velocidad de animación
+    
+    ; Mensajes informativos
+    mensaje_titulo db 'ADVENTURE QUEST - Recolecta tesoros y escapa!$'
+    mensaje_controles db 'Controles: WASD para mover, ESC para salir$'
+    mensaje_objetivo db 'Objetivo: Recolecta 2 ORO, 2 CRISTALES, 2 TESOROS$'
+    mensaje_estado db 'Oro: 0/2  Cristales: 0/2  Tesoros: 0/2$'
+
+.code
+start:
+    mov ax, @data
+    mov ds, ax
+    
+    call show_intro
+    call init_ega_mode
+    
+game_loop:
+    cmp byte ptr [redraw], 1
+    jne skip_draw
+    
+    call update_camera
+    call clear_and_draw
+    mov byte ptr [redraw], 0
+
+skip_draw:
+    call get_key_nowait
+    cmp byte ptr [tecla], 0
+    je game_loop
+    
+    call move_player
+    call update_player_animation
+    call check_item_collection
+    call check_win
+    
+    cmp byte ptr [fin], 1
+    jne game_loop
+    
+    call restore_screen
+    mov ax, 4c00h
+    int 21h
+
+show_intro proc
+    ; Mostrar pantalla de introducción
+    mov ax, 0003h       ; Modo texto
+    int 10h
+    
+    ; Posicionar cursor y mostrar título
+    mov ah, 02h
+    mov bh, 0
+    mov dh, 5           ; Fila 5
+    mov dl, 10          ; Columna 10
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_titulo
+    int 21h
+    
+    ; Mostrar controles
+    mov ah, 02h
+    mov dh, 8
+    mov dl, 15
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_controles
+    int 21h
+    
+    ; Mostrar objetivo
+    mov ah, 02h
+    mov dh, 10
+    mov dl, 12
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_objetivo
+    int 21h
+    
+    ; Información sobre modo EGA
+    mov ah, 02h
+    mov dh, 13
+    mov dl, 15
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_ega
+    int 21h
+    
+    ; Esperar tecla
+    mov ah, 02h
+    mov dh, 16
+    mov dl, 20
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_presiona
+    int 21h
+    
+    mov ah, 07h         ; Esperar tecla sin eco
+    int 21h
+    
+    ret
+
+mensaje_presiona db 'Presiona cualquier tecla para comenzar...$'
+mensaje_ega db 'Modo EGA 640x350, 16 colores activado$'
+show_intro endp
+
+init_ega_mode proc
+    ; Activar modo gráfico EGA 640x350, 16 colores
+    mov ax, 0010h       ; Modo EGA 10h (640x350, 16 colores)
+    int 10h
+    ret
+init_ega_mode endp
+
+update_camera proc
+    push ax
+    push bx
+    
+    ; Centrar cámara en el jugador
+    mov al, byte ptr [px]
+    cmp al, VIEWPORT_TILES_X_HALF
+    jl camera_x_min
+    sub al, VIEWPORT_TILES_X_HALF
+    jmp camera_x_check_max
+camera_x_min:
+    mov al, 0
+camera_x_check_max:
+    mov bl, MAPA_ANCHO - VIEWPORT_TILES_X
+    cmp al, bl
+    jle camera_x_valid
+    mov al, bl
+camera_x_valid:
+    mov byte ptr [camera_x], al
+    
+    ; Centrar cámara en Y
+    mov al, byte ptr [py]
+    cmp al, VIEWPORT_TILES_Y_HALF
+    jl camera_y_min
+    sub al, VIEWPORT_TILES_Y_HALF
+    jmp camera_y_check_max
+camera_y_min:
+    mov al, 0
+camera_y_check_max:
+    mov bl, MAPA_ALTO - VIEWPORT_TILES_Y
+    cmp al, bl
+    jle camera_y_valid
+    mov al, bl
+camera_y_valid:
+    mov byte ptr [camera_y], al
+    
+    pop bx
+    pop ax
+    ret
+update_camera endp
+
+clear_and_draw proc
+    call clear_screen_simple
+    call draw_hud_simple
+    call draw_viewport_simple
+    call draw_player_simple
+    call draw_status_simple
+    ret
+clear_and_draw endp
+
+clear_screen_simple proc
+    push ax
+    push cx
+    push dx
+    
+    ; Limpiar pantalla usando INT 10h (más compatible)
+    mov ax, 0600h       ; Función scroll up (limpiar pantalla)
+    mov bh, 00h         ; Atributo (negro sobre negro)
+    mov cx, 0000h       ; Esquina superior izquierda
+    mov dx, 184Fh       ; Esquina inferior derecha (24,79)
+    int 10h
+    
+    pop dx
+    pop cx
+    pop ax
+    ret
+clear_screen_simple endp
+
+draw_hud_simple proc
+    push ax
+    push bx
+    push cx
+    push dx
+    
+    ; Dibujar HUD usando píxeles EGA
+    mov dx, 0
+hud_y_loop:
+    mov cx, 0
+hud_x_loop:
+    mov ah, 0Ch         ; Función escribir pixel
+    mov al, 1           ; Color azul
+    mov bh, 0           ; Página de video
+    int 10h
+    inc cx
+    cmp cx, 640         ; Ancho EGA
+    jl hud_x_loop
+    inc dx
+    cmp dx, 25          ; Altura del HUD
+    jl hud_y_loop
+    
+    ; Dibujar contadores como texto simple
+    mov ah, 02h         ; Posicionar cursor
+    mov bh, 0
+    mov dh, 1
+    mov dl, 2
+    int 10h
+    
+    mov ah, 0Eh         ; Escribir carácter
+    mov al, 'G'
+    int 10h
+    mov al, ':'
+    int 10h
+    mov al, byte ptr [gold_count]
+    add al, 30h
+    int 10h
+    mov al, '/'
+    int 10h
+    mov al, byte ptr [gold_needed]
+    add al, 30h
+    int 10h
+    
+    mov ah, 02h
+    mov dh, 1
+    mov dl, 12
+    int 10h
+    
+    mov ah, 0Eh
+    mov al, 'C'
+    int 10h
+    mov al, ':'
+    int 10h
+    mov al, byte ptr [crystals_count]
+    add al, 30h
+    int 10h
+    mov al, '/'
+    int 10h
+    mov al, byte ptr [crystals_needed]
+    add al, 30h
+    int 10h
+    
+    mov ah, 02h
+    mov dh, 1
+    mov dl, 22
+    int 10h
+    
+    mov ah, 0Eh
+    mov al, 'T'
+    int 10h
+    mov al, ':'
+    int 10h
+    mov al, byte ptr [treasures_count]
+    add al, 30h
+    int 10h
+    mov al, '/'
+    int 10h
+    mov al, byte ptr [treasures_needed]
+    add al, 30h
+    int 10h
+    
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_hud_simple endp
+
+draw_viewport_simple proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    
+    mov si, 0           ; Contador Y del viewport
+
+viewport_y_loop_simple:
+    mov di, 0           ; Contador X del viewport
+
+viewport_x_loop_simple:
+    ; Calcular posición Y en el mapa
+    mov al, byte ptr [camera_y]
+    mov ah, 0
+    add ax, si          ; camera_y + viewport_y
+    
+    ; Calcular posición X en el mapa  
+    mov bl, byte ptr [camera_x]
+    mov bh, 0
+    add bx, di          ; camera_x + viewport_x
+    
+    ; Calcular índice del mapa: Y * MAPA_ANCHO + X
+    push bx             ; Guardar X
+    mov dx, MAPA_ANCHO
+    mul dx              ; AX = Y * MAPA_ANCHO
+    pop bx              ; Recuperar X
+    add ax, bx          ; AX = Y * MAPA_ANCHO + X
+    mov bx, ax          ; BX = índice del mapa
+    
+    ; Verificar límites del mapa
+    cmp bx, 300         ; 20*15 = 300 tiles máximo
+    jge skip_current_tile_simple
+    
+    ; Obtener tile del mapa
+    mov al, byte ptr [mapa + bx]
+    
+    ; Calcular posición en pantalla
+    push ax             ; Guardar tipo de tile
+    
+    ; X en pantalla = di * TILE_SIZE * 2 (escalar para EGA)
+    mov ax, di
+    mov dx, TILE_SIZE
+    mul dx
+    shl ax, 1           ; Multiplicar por 2 para EGA
+    add ax, 20          ; Offset desde el borde
+    mov cx, ax          ; CX = X en pantalla
+    
+    ; Y en pantalla = si * TILE_SIZE + 30 (offset HUD para EGA)
+    mov ax, si
+    mov dx, TILE_SIZE
+    mul dx
+    add ax, 40          ; Offset para HUD en EGA
+    mov dx, ax          ; DX = Y en pantalla
+    
+    ; Verificar si está dentro del viewport visible
+    cmp cx, 620         ; Límite derecho del viewport para EGA
+    jge skip_tile_draw_simple
+    cmp dx, 340         ; Límite inferior del viewport
+    jge skip_tile_draw_simple
+    
+    pop ax              ; Recuperar tipo de tile
+    call draw_tile_simple
+    jmp continue_loop_simple
+
+skip_tile_draw_simple:
+    pop ax              ; Limpiar stack
+    jmp continue_loop_simple
+
+skip_current_tile_simple:
+    ; No hay nada que limpiar del stack aquí
+
+continue_loop_simple:
+    inc di
+    cmp di, VIEWPORT_TILES_X
+    jl viewport_x_loop_simple
+    
+    inc si
+    cmp si, VIEWPORT_TILES_Y
+    jl viewport_y_loop_simple
+    
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_viewport_simple endp
+
+draw_tile_simple proc
+    ; AL = tipo de tile, CX,DX = posición
+    push cx
+    push dx
+    push ax
+    
+    ; Obtener color según tipo de tile
+    cmp al, '#'
+    je tile_wall_simple
+    cmp al, '~'
+    je tile_water_simple
+    cmp al, 'G'
+    je tile_gold_simple
+    cmp al, 'C'
+    je tile_crystal_simple
+    cmp al, 'T'
+    je tile_treasure_simple
+    cmp al, 'O'
+    je tile_pit_simple
+    cmp al, '+'    
+    je tile_path_simple
+    cmp al, 'E'
+    je tile_exit_simple
+    cmp al, '.'    
+    je tile_floor_simple
+    
+    ; Default - suelo de piedra
+    mov al, 7           ; Gris claro
+    jmp draw_tile_color
+
+tile_wall_simple:
+    mov al, 8           ; Gris medio
+    jmp draw_tile_color
+
+tile_water_simple:
+    mov al, 1           ; Azul
+    jmp draw_tile_color
+
+tile_path_simple:
+    mov al, 14          ; Amarillo brillante
+    jmp draw_tile_color
+
+tile_exit_simple:
+    mov al, 13          ; Magenta brillante
+    jmp draw_tile_color
+
+tile_gold_simple:
+    mov al, 14          ; Amarillo
+    jmp draw_tile_color
+
+tile_crystal_simple:
+    mov al, 11          ; Cyan brillante
+    jmp draw_tile_color
+
+tile_treasure_simple:
+    mov al, 12          ; Rojo brillante
+    jmp draw_tile_color
+
+tile_pit_simple:
+    mov al, 0           ; Negro
+    jmp draw_tile_color
+
+tile_floor_simple:
+    mov al, 7           ; Gris claro
+
+draw_tile_color:
+    ; Dibujar tile como bloque de píxeles
+    push bx
+    push si
+    
+    mov bx, 0
+tile_y_simple:
+    mov si, 0
+tile_x_simple:
+    push ax
+    push cx
+    push dx
+    mov ah, 0Ch         ; Función escribir pixel
+    mov bh, 0           ; Página de video
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    pop ax
+    
+    inc si
+    cmp si, TILE_SIZE * 2  ; Escalar para EGA
+    jl tile_x_simple
+    inc bx
+    cmp bx, TILE_SIZE
+    jl tile_y_simple
+    
+    pop si
+    pop bx
+    pop ax
+    pop dx
+    pop cx
+    ret
+draw_tile_simple endp
+
+draw_player_simple proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    
+    ; Calcular posición del jugador en viewport
+    mov al, byte ptr [px]
+    sub al, byte ptr [camera_x]
+    mov ah, 0
+    mov dx, TILE_SIZE
+    mul dx
+    shl ax, 1           ; Escalar para EGA
+    add ax, 20          ; Offset
+    mov cx, ax
+    
+    mov al, byte ptr [py]
+    sub al, byte ptr [camera_y]
+    mov ah, 0
+    mov dx, TILE_SIZE
+    mul dx
+    add ax, 40          ; Offset para HUD en EGA
+    mov dx, ax
+    
+    ; Solo dibujar si está visible en viewport
+    cmp cx, 620
+    jg player_skip_simple
+    cmp dx, 340
+    jg player_skip_simple
+    
+    call draw_animated_player_simple
+    
+player_skip_simple:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_player_simple endp
+
+draw_animated_player_simple proc
+    push ax
+    push bx
+    push si
+    
+    ; Dibujar jugador como figura humanoide
+    ; Cabeza
+    mov bx, 2
+    mov si, 8
+head_anim_y_simple:
+    push si
+    mov si, 8
+head_anim_x_simple:
+    push ax
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 14          ; Amarillo para piel
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    pop ax
+    inc si
+    cmp si, 24          ; Más grande para EGA
+    jl head_anim_x_simple
+    pop si
+    inc bx
+    cmp bx, 12
+    jl head_anim_y_simple
+    
+    ; Cuerpo
+    mov bx, 12
+body_anim_y_simple:
+    mov si, 10
+body_anim_x_simple:
+    push ax
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 9           ; Azul para ropa
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    pop ax
+    inc si
+    cmp si, 22
+    jl body_anim_x_simple
+    inc bx
+    cmp bx, 22
+    jl body_anim_y_simple
+    
+    ; Piernas animadas según frame
+    call draw_legs_simple
+    
+    ; Ojos
+    mov bx, 6
+    mov si, 12
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 0           ; Negro
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    mov si, 20
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 0
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    pop si
+    pop bx
+    pop ax
+    ret
+draw_animated_player_simple endp
+
+draw_legs_simple proc
+    push ax
+    push bx
+    push si
+    
+    ; Piernas con animación de caminar
+    mov al, byte ptr [player_frame]
+    
+    cmp al, 1
+    je legs_frame1_simple
+    cmp al, 3
+    je legs_frame3_simple
+    
+    ; Frame 0 y 2: posición neutral
+legs_normal_simple:
+    mov bx, 22
+legs_normal_y_simple:
+    mov si, 12
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 6           ; Marrón para pantalones
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    mov si, 20
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 6
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    inc bx
+    cmp bx, 30
+    jl legs_normal_y_simple
+    jmp legs_end_simple
+    
+legs_frame1_simple:
+    ; Pierna izquierda adelante
+    mov bx, 22
+legs_f1_y_simple:
+    mov si, 10          ; Pierna izq. adelante
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 6
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    mov si, 22          ; Pierna der. atrás
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 6
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    inc bx
+    cmp bx, 30
+    jl legs_f1_y_simple
+    jmp legs_end_simple
+    
+legs_frame3_simple:
+    ; Pierna derecha adelante
+    mov bx, 22
+legs_f3_y_simple:
+    mov si, 14          ; Pierna izq. atrás
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 6
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    mov si, 18          ; Pierna der. adelante
+    push cx
+    push dx
+    mov ah, 0Ch
+    mov al, 6
+    mov bh, 0
+    add cx, si
+    add dx, bx
+    int 10h
+    pop dx
+    pop cx
+    
+    inc bx
+    cmp bx, 30
+    jl legs_f3_y_simple
+
+legs_end_simple:
+    pop si
+    pop bx
+    pop ax
+    ret
+draw_legs_simple endp
+
+draw_status_simple proc
+    ; Mostrar estado del juego en la parte inferior
+    push ax
+    push bx
+    push cx
+    push dx
+    
+    ; Verificar si el jugador ha completado los objetivos
+    mov al, byte ptr [gold_count]
+    cmp al, byte ptr [gold_needed]
+    jl status_incomplete_simple
+    mov al, byte ptr [crystals_count]
+    cmp al, byte ptr [crystals_needed]
+    jl status_incomplete_simple
+    mov al, byte ptr [treasures_count]
+    cmp al, byte ptr [treasures_needed]
+    jl status_incomplete_simple
+    
+    ; Mostrar mensaje de "¡Ve a la salida!"
+    mov ah, 02h
+    mov bh, 0
+    mov dh, 23
+    mov dl, 25
+    int 10h
+    
+    mov ah, 0Eh
+    mov al, 'V'
+    int 10h
+    mov al, 'e'
+    int 10h
+    mov al, ' '
+    int 10h
+    mov al, 'a'
+    int 10h
+    mov al, ' '
+    int 10h
+    mov al, 'l'
+    int 10h
+    mov al, 'a'
+    int 10h
+    mov al, ' '
+    int 10h
+    mov al, 's'
+    int 10h
+    mov al, 'a'
+    int 10h
+    mov al, 'l'
+    int 10h
+    mov al, 'i'
+    int 10h
+    mov al, 'd'
+    int 10h
+    mov al, 'a'
+    int 10h
+    mov al, '!'
+    int 10h
+    jmp status_end_simple
+    
+status_incomplete_simple:
+    ; Mostrar mensaje de "Busca más tesoros"
+    mov ah, 02h
+    mov bh, 0
+    mov dh, 23
+    mov dl, 20
+    int 10h
+    
+    mov ah, 0Eh
+    mov al, 'B'
+    int 10h
+    mov al, 'u'
+    int 10h
+    mov al, 's'
+    int 10h
+    mov al, 'c'
+    int 10h
+    mov al, 'a'
+    int 10h
+    mov al, ' '
+    int 10h
+    mov al, 'm'
+    int 10h
+    mov al, 'a'
+    int 10h
+    mov al, 's'
+    int 10h
+    mov al, ' '
+    int 10h
+    mov al, 't'
+    int 10h
+    mov al, 'e'
+    int 10h
+    mov al, 's'
+    int 10h
+    mov al, 'o'
+    int 10h
+    mov al, 'r'
+    int 10h
+    mov al, 'o'
+    int 10h
+    mov al, 's'
+    int 10h
+
+status_end_simple:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_status_simple endp
+
+update_player_animation proc
+    push ax
+    
+    ; Actualizar contador de animación
+    inc byte ptr [animation_counter]
+    cmp byte ptr [animation_counter], 8  ; Velocidad de animación
+    jl no_frame_update
+    
+    ; Reiniciar contador y avanzar frame
+    mov byte ptr [animation_counter], 0
+    inc byte ptr [player_frame]
+    cmp byte ptr [player_frame], 4  ; 4 frames de animación
+    jl no_frame_update
+    mov byte ptr [player_frame], 0
+    
+no_frame_update:
+    pop ax
+    ret
+update_player_animation endp
+
+check_item_collection proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [py]
+    mov ah, 0
+    mov dx, MAPA_ANCHO
+    mul dx
+    mov dl, byte ptr [px]
+    mov dh, 0
+    add ax, dx
+    mov si, ax
+    
+    ; Verificar límites
+    cmp si, 300
+    jge no_collection
+    
+    mov al, byte ptr [mapa + si]
+    
+    cmp al, 'G'
+    je collect_gold
+    cmp al, 'C'
+    je collect_crystal
+    cmp al, 'T'
+    je collect_treasure
+    jmp no_collection
+
+collect_gold:
+    inc byte ptr [gold_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+    jmp no_collection
+
+collect_crystal:
+    inc byte ptr [crystals_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+    jmp no_collection
+
+collect_treasure:
+    inc byte ptr [treasures_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [redraw], 1
+
+no_collection:
+    pop si
+    pop bx
+    pop ax
+    ret
+check_item_collection endp
+
+get_key_nowait proc
+    mov byte ptr [tecla], 0
+    mov ah, 01h
+    int 16h
+    jz no_key_available
+    
+    mov ah, 00h
+    int 16h
+    mov byte ptr [tecla], al
+
+no_key_available:
+    ret
+get_key_nowait endp
+
+move_player proc
+    mov al, byte ptr [tecla]
+    
+    cmp al, 27
+    je salida_juego
+    
+    cmp al, 'w'
+    je mover_arriba
+    cmp al, 'W'
+    je mover_arriba
+    
+    cmp al, 's'
+    je mover_abajo
+    cmp al, 'S'
+    je mover_abajo
+    
+    cmp al, 'a'
+    je mover_izquierda
+    cmp al, 'A'
+    je mover_izquierda
+    
+    cmp al, 'd'
+    je mover_derecha
+    cmp al, 'D'
+    je mover_derecha
+    
+    ret
+
+salida_juego:
+    mov byte ptr [fin], 1
+    ret
+
+mover_arriba:
+    cmp byte ptr [py], 0
+    je movimiento_invalido
+    mov byte ptr [player_direction], 1  ; Dirección arriba
+    dec byte ptr [py]
+    call validar_movimiento
+    ret
+
+mover_abajo:
+    cmp byte ptr [py], MAPA_ALTO-1
+    je movimiento_invalido
+    mov byte ptr [player_direction], 0  ; Dirección abajo
+    inc byte ptr [py]
+    call validar_movimiento
+    ret
+
+mover_izquierda:
+    cmp byte ptr [px], 0
+    je movimiento_invalido
+    mov byte ptr [player_direction], 2  ; Dirección izquierda
+    dec byte ptr [px]
+    call validar_movimiento
+    ret
+
+mover_derecha:
+    cmp byte ptr [px], MAPA_ANCHO-1
+    je movimiento_invalido
+    mov byte ptr [player_direction], 3  ; Dirección derecha
+    inc byte ptr [px]
+    call validar_movimiento
+    ret
+
+movimiento_invalido:
+    ret
+move_player endp
+
+validar_movimiento proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [py]
+    mov ah, 0
+    mov dx, MAPA_ANCHO
+    mul dx
+    mov dl, byte ptr [px]
+    mov dh, 0
+    add ax, dx
+    mov si, ax
+    
+    ; Verificar límites
+    cmp si, 300
+    jge deshacer_movimiento
+    
+    mov al, byte ptr [mapa + si]
+    cmp al, '#'
+    je deshacer_movimiento
+    cmp al, '~'
+    je deshacer_movimiento
+    cmp al, 'O'
+    je deshacer_movimiento
+    
+    ; Movimiento válido
+    mov byte ptr [redraw], 1
+    jmp fin_validacion
+
+deshacer_movimiento:
+    mov al, byte ptr [tecla]
+    cmp al, 'w'
+    je deshacer_arriba
+    cmp al, 'W'
+    je deshacer_arriba
+    cmp al, 's'
+    je deshacer_abajo
+    cmp al, 'S'
+    je deshacer_abajo
+    cmp al, 'a'
+    je deshacer_izquierda
+    cmp al, 'A'
+    je deshacer_izquierda
+    cmp al, 'd'
+    je deshacer_derecha
+    cmp al, 'D'
+    je deshacer_derecha
+    jmp fin_validacion
+
+deshacer_arriba:
+    inc byte ptr [py]
+    jmp fin_validacion
+deshacer_abajo:
+    dec byte ptr [py]
+    jmp fin_validacion
+deshacer_izquierda:
+    inc byte ptr [px]
+    jmp fin_validacion
+deshacer_derecha:
+    dec byte ptr [px]
+    jmp fin_validacion
+
+fin_validacion:
+    pop si
+    pop bx
+    pop ax
+    ret
+validar_movimiento endp
+
+check_win proc
+    push ax
+    push bx
+    push si
+    
+    mov al, byte ptr [gold_count]
+    cmp al, byte ptr [gold_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [crystals_count]
+    cmp al, byte ptr [crystals_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [treasures_count]
+    cmp al, byte ptr [treasures_needed]
+    jl no_ganaste
+    
+    mov al, byte ptr [py]
+    mov ah, 0
+    mov dx, MAPA_ANCHO
+    mul dx
+    mov dl, byte ptr [px]
+    mov dh, 0
+    add ax, dx
+    mov si, ax
+    
+    cmp byte ptr [mapa + si], 'E'
+    jne no_ganaste
+    
+    ; Victoria!
+    mov ax, 0003h
+    int 10h
+    
+    mov ah, 02h
+    mov bh, 0
+    mov dh, 10
+    mov dl, 10
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_victoria
+    int 21h
+    
+    mov ah, 02h
+    mov dh, 12
+    mov dl, 8
+    int 10h
+    
+    mov ah, 09h
+    mov dx, offset mensaje_tecnico
+    int 21h
+    
+    mov ah, 07h
+    int 21h
+    mov byte ptr [fin], 1
+
+no_ganaste:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+mensaje_victoria db '¡¡¡FELICIDADES!!! ¡Has completado Adventure Quest!$'
+mensaje_tecnico db 'Modo EGA 640x350 con animaciones implementado.$'
+check_win endp
+
+restore_screen proc
+    mov ax, 0003h
+    int 10h
+    
+    mov ah, 01h
+    mov cx, 0607h
+    int 10h
+    ret
+restore_screen endp
+
+end start

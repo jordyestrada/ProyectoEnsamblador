@@ -1,0 +1,839 @@
+﻿; ===== juego.asm =====
+.model small
+.stack 100h
+
+.data
+    ; Doble Buffer - definido PRIMERO
+    screen_dirty db 1
+    last_px db 2
+    last_py db 1
+    last_camera_x db 0
+    last_camera_y db 0
+
+    ; Incluir SOLO la parte .data de cada archivo
+    include mapa.inc      ; contiene constantes y buffer mapa
+    
+    ; Variables de sprites (extraídas de sprites.inc)
+    player_direction db 0
+    player_frame     db 0
+    animation_counter db 0
+    temp_y dw 0
+    temp_x dw 0
+    
+    ; Variables de loader (extraídas de loader.inc)
+    MAP_BYTES      equ MAPA_ANCHO * MAPA_ALTO
+    mapa_file      db 'mapa.bin', 0
+    __handle       dw 0
+
+    ; Variables del jugador
+    px db 2
+    py db 1
+    tecla db 0
+    fin db 0
+
+    ; Sistema de inventario
+    gold_count db 0
+    crystals_count db 0
+    treasures_count db 0
+
+    ; Objetivos
+    gold_needed db 2
+    crystals_needed db 2
+    treasures_needed db 2
+
+    ; Mensajes informativos
+    mensaje_titulo   db 'ADVENTURE QUEST - Recolecta tesoros y escapa!$'
+    mensaje_controles db 'Controles: WASD para mover, ESC para salir$'
+    mensaje_objetivo db 'Objetivo: Recolecta 2 ORO, 2 CRISTALES, 2 TESOROS$'
+    mensaje_presiona db 'Presiona cualquier tecla para comenzar...$'
+    mensaje_ega      db 'Modo EGA 640x350, 16 colores$'
+    mensaje_victoria db '¡¡¡FELICIDADES!!! ¡Has completado Adventure Quest!$'
+    mensaje_tecnico  db 'Modo EGA 640x350 con sprites detallados y animaciones.$'
+    mensaje_final    db 'Proyecto de Assembly - Graficos EGA Avanzados$'
+
+.code
+    ; Incluir SOLO la parte .code de cada archivo
+    include sprites.inc   ; procedimientos de dibujo
+    include loader.inc    ; procedimiento de carga
+
+start:
+    mov ax, @data
+    mov ds, ax
+
+    call load_map_from_file
+    call show_intro
+    call init_ega_mode
+    
+    ; FORZAR DIBUJADO INICIAL COMPLETO
+    call update_camera
+    call clear_and_draw
+    
+    ; Inicializar última posición de cámara
+    mov al, byte ptr [camera_x]
+    mov byte ptr [last_camera_x], al
+    mov al, byte ptr [camera_y]
+    mov byte ptr [last_camera_y], al
+    
+    ; Inicializar última posición del jugador
+    mov al, byte ptr [px]
+    mov byte ptr [last_px], al
+    mov al, byte ptr [py]
+    mov byte ptr [last_py], al
+    
+    mov byte ptr [screen_dirty], 0
+
+game_loop:
+    ; Doble buffer - solo redibujar si hay cambios
+    cmp byte ptr [screen_dirty], 1
+    jne skip_draw
+
+    call update_camera
+
+    ; Verificar si la cámara cambió
+    mov al, byte ptr [camera_x]
+    cmp al, byte ptr [last_camera_x]
+    jne camera_changed
+    mov al, byte ptr [camera_y]
+    cmp al, byte ptr [last_camera_y]
+    jne camera_changed
+
+    ; Solo dibujar el jugador si la cámara no cambió
+    call draw_player_only
+    jmp draw_done
+
+camera_changed:
+    ; Redibujar todo si la cámara cambió
+    ; call clear_screen_ega    ; <- DESACTIVADO (ya redibujamos todo)
+    call clear_and_draw
+
+    ; Actualizar última posición de cámara
+    mov al, byte ptr [camera_x]
+    mov byte ptr [last_camera_x], al
+    mov al, byte ptr [camera_y]
+    mov byte ptr [last_camera_y], al
+
+draw_done:
+    ; Actualizar última posición del jugador
+    mov al, byte ptr [px]
+    mov byte ptr [last_px], al
+    mov al, byte ptr [py]
+    mov byte ptr [last_py], al
+
+    mov byte ptr [screen_dirty], 0
+
+skip_draw:
+    call get_key_nowait
+    cmp byte ptr [tecla], 0
+    je game_loop
+
+    call move_player
+    call update_player_animation
+    call check_item_collection
+    call check_win
+
+    cmp byte ptr [fin], 1
+    jne game_loop
+
+    call restore_screen
+    mov ax, 4c00h
+    int 21h
+
+show_intro proc
+    mov ax, 0003h
+    int 10h
+
+    mov ah, 02h
+    mov bh, 0
+    mov dh, 5
+    mov dl, 8
+    int 10h
+
+    mov ah, 09h
+    mov dx, offset mensaje_titulo
+    int 21h
+
+    mov ah, 02h
+    mov dh, 8
+    mov dl, 12
+    int 10h
+
+    mov ah, 09h
+    mov dx, offset mensaje_controles
+    int 21h
+
+    mov ah, 02h
+    mov dh, 10
+    mov dl, 8
+    int 10h
+
+    mov ah, 09h
+    mov dx, offset mensaje_objetivo
+    int 21h
+
+    mov ah, 02h
+    mov dh, 13
+    mov dl, 18
+    int 10h
+
+    mov ah, 09h
+    mov dx, offset mensaje_ega
+    int 21h
+
+    mov ah, 02h
+    mov dh, 16
+    mov dl, 20
+    int 10h
+
+    mov ah, 09h
+    mov dx, offset mensaje_presiona
+    int 21h
+
+    mov ah, 07h
+    int 21h
+    ret
+show_intro endp
+
+init_ega_mode proc
+    mov ax, 0010h
+    int 10h
+    ret
+init_ega_mode endp
+
+update_camera proc
+    push ax
+    push bx
+
+    mov al, byte ptr [px]
+    cmp al, VIEWPORT_TILES_X_HALF
+    jl camera_x_min
+    sub al, VIEWPORT_TILES_X_HALF
+    jmp camera_x_check_max
+camera_x_min:
+    mov al, 0
+camera_x_check_max:
+    mov bl, MAPA_ANCHO - VIEWPORT_TILES_X
+    cmp al, bl
+    jle camera_x_valid
+    mov al, bl
+camera_x_valid:
+    mov byte ptr [camera_x], al
+
+    mov al, byte ptr [py]
+    cmp al, VIEWPORT_TILES_Y_HALF
+    jl camera_y_min
+    sub al, VIEWPORT_TILES_Y_HALF
+    jmp camera_y_check_max
+camera_y_min:
+    mov al, 0
+camera_y_check_max:
+    mov bl, MAPA_ALTO - VIEWPORT_TILES_Y
+    cmp al, bl
+    jle camera_y_valid
+    mov al, bl
+camera_y_valid:
+    mov byte ptr [camera_y], al
+
+    pop bx
+    pop ax
+    ret
+update_camera endp
+
+draw_player_only proc
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; Borrar jugador en posición anterior
+    mov al, byte ptr [last_px]
+    sub al, byte ptr [last_camera_x]
+    mov ah, 0
+    mov dx, TILE_SIZE
+    mul dx
+    add ax, 40
+    mov cx, ax
+
+    mov al, byte ptr [last_py]
+    sub al, byte ptr [last_camera_y]
+    mov ah, 0
+    mov dx, TILE_SIZE
+    mul dx
+    add ax, 50
+    mov dx, ax
+
+    ; Redibujar el tile donde estaba el jugador
+    push cx
+    push dx
+    mov al, byte ptr [last_py]
+    mov ah, 0
+    mov bx, MAPA_ANCHO
+    mul bx
+    mov bl, byte ptr [last_px]
+    mov bh, 0
+    add ax, bx
+    mov bx, ax
+    mov al, byte ptr [mapa + bx]
+    pop dx
+    pop cx
+    call draw_tile_enhanced
+
+    ; Dibujar jugador en nueva posición
+    call draw_player_enhanced
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_player_only endp
+
+clear_and_draw proc
+    ; call clear_screen_ega   ; <- desactivado
+    call draw_hud_enhanced
+    call draw_viewport_enhanced
+    call draw_player_enhanced
+    call draw_status_enhanced
+    ret
+clear_and_draw endp
+
+clear_screen_ega proc
+    push ax
+    push cx
+    push dx
+    mov dx, 0
+clear_y_loop:
+    mov cx, 0
+clear_x_loop:
+    mov ah, 0Ch
+    mov al, 0
+    mov bh, 0
+    int 10h
+    inc cx
+    cmp cx, 640
+    jl clear_x_loop
+    inc dx
+    cmp dx, 350
+    jl clear_y_loop
+    pop dx
+    pop cx
+    pop ax
+    ret
+clear_screen_ega endp
+
+draw_hud_enhanced proc
+    push ax
+    push bx
+    push cx
+    push dx
+    
+    ; Dibujar HUD optimizado - solo bordes y texto
+    mov dx, 0
+hud_y_loop:
+    mov cx, 0
+hud_x_loop:
+    ; Solo dibujar cada 4 píxeles para acelerar
+    test cx, 3
+    jnz hud_skip_pixel
+    
+    mov ah, 0Ch
+    cmp dx, 8
+    jl hud_dark_opt
+    cmp dx, 16
+    jl hud_medium_opt
+    mov al, 3
+    jmp short hud_draw_opt
+hud_medium_opt:
+    mov al, 1
+    jmp short hud_draw_opt
+hud_dark_opt:
+    mov al, 8
+hud_draw_opt:
+    mov bh, 0
+    int 10h
+    
+    ; Dibujar los siguientes 3 píxeles del mismo color
+    inc cx
+    int 10h
+    inc cx
+    int 10h
+    inc cx
+    int 10h
+    
+hud_skip_pixel:
+    inc cx
+    cmp cx, 640
+    jl hud_x_loop
+    inc dx
+    cmp dx, 25
+    jl hud_y_loop
+    
+    call draw_hud_text
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_hud_enhanced endp
+
+draw_hud_text proc
+    push ax
+    push bx
+    push cx
+    push dx
+    ; ORO
+    mov cx, 30
+    mov dx, 8
+    mov al, 14
+    call draw_text_pixel
+    mov al, 'O'
+    call draw_char_fancy
+    mov al, 'R'
+    add cx, 12
+    call draw_char_fancy
+    mov al, 'O'
+    add cx, 12
+    call draw_char_fancy
+    mov al, ':'
+    add cx, 12
+    call draw_char_fancy
+    add cx, 15
+    mov al, byte ptr [gold_count]
+    add al, 30h
+    call draw_char_large
+    mov al, '/'
+    add cx, 15
+    call draw_char_large
+    mov al, byte ptr [gold_needed]
+    add al, 30h
+    add cx, 15
+    call draw_char_large
+
+    ; CRISTALES
+    mov cx, 200
+    mov dx, 8
+    mov al, 11
+    call draw_text_pixel
+    mov al, 'C'
+    call draw_char_fancy
+    mov al, 'R'
+    add cx, 12
+    call draw_char_fancy
+    mov al, 'I'
+    add cx, 12
+    call draw_char_fancy
+    mov al, 'S'
+    add cx, 12
+    call draw_char_fancy
+    mov al, ':'
+    add cx, 12
+    call draw_char_fancy
+    add cx, 15
+    mov al, byte ptr [crystals_count]
+    add al, 30h
+    call draw_char_large
+    mov al, '/'
+    add cx, 15
+    call draw_char_large
+    mov al, byte ptr [crystals_needed]
+    add al, 30h
+    add cx, 15
+    call draw_char_large
+
+    ; TESOROS
+    mov cx, 400
+    mov dx, 8
+    mov al, 12
+    call draw_text_pixel
+    mov al, 'T'
+    call draw_char_fancy
+    mov al, 'E'
+    add cx, 12
+    call draw_char_fancy
+    mov al, 'S'
+    add cx, 12
+    call draw_char_fancy
+    mov al, ':'
+    add cx, 12
+    call draw_char_fancy
+    add cx, 15
+    mov al, byte ptr [treasures_count]
+    add al, 30h
+    call draw_char_large
+    mov al, '/'
+    add cx, 15
+    call draw_char_large
+    mov al, byte ptr [treasures_needed]
+    add al, 30h
+    add cx, 15
+    call draw_char_large
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_hud_text endp
+
+draw_text_pixel proc
+    ret
+draw_text_pixel endp
+
+; ==== viewport / status / items / teclado / movimiento / victoria ====
+; (idéntico a tu versión; no lo recorto)
+draw_viewport_enhanced proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, 0
+viewport_y_loop_enh:
+    mov di, 0
+viewport_x_loop_enh:
+    mov al, byte ptr [camera_y]
+    mov ah, 0
+    add ax, si
+    mov bl, byte ptr [camera_x]
+    mov bh, 0
+    add bx, di
+    push bx
+    mov dx, MAPA_ANCHO
+    mul dx
+    pop bx
+    add ax, bx
+    mov bx, ax
+    cmp bx, 300
+    jge skip_current_tile_enh
+    mov al, byte ptr [mapa + bx]
+    push ax
+    mov ax, di
+    mov dx, TILE_SIZE
+    mul dx
+    add ax, 40
+    mov cx, ax
+    mov ax, si
+    mov dx, TILE_SIZE
+    mul dx
+    add ax, 50
+    mov dx, ax
+    cmp cx, 600
+    jge skip_tile_draw_enh
+    cmp dx, 320
+    jge skip_tile_draw_enh
+    pop ax
+    call draw_tile_enhanced
+    jmp continue_loop_enh
+skip_tile_draw_enh:
+    pop ax
+    jmp continue_loop_enh
+skip_current_tile_enh:
+continue_loop_enh:
+    inc di
+    cmp di, VIEWPORT_TILES_X
+    jl viewport_x_loop_enh
+    inc si
+    cmp si, VIEWPORT_TILES_Y
+    jl viewport_y_loop_enh
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_viewport_enhanced endp
+
+draw_status_enhanced proc
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, byte ptr [gold_count]
+    cmp al, byte ptr [gold_needed]
+    jl status_incomplete_enh
+    mov al, byte ptr [crystals_count]
+    cmp al, byte ptr [crystals_needed]
+    jl status_incomplete_enh
+    mov al, byte ptr [treasures_count]
+    cmp al, byte ptr [treasures_needed]
+    jl status_incomplete_enh
+    call draw_victory_message
+    jmp status_end_enh
+status_incomplete_enh:
+    call draw_search_message
+status_end_enh:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+draw_status_enhanced endp
+
+draw_victory_message proc
+    mov dx, 330
+    mov cx, 200
+victory_loop:
+    mov ah, 0Ch
+    mov al, 14
+    mov bh, 0
+    int 10h
+    inc cx
+    cmp cx, 440
+    jl victory_loop
+    ret
+draw_victory_message endp
+
+draw_search_message proc
+    mov dx, 330
+    mov cx, 180
+search_loop:
+    mov ah, 0Ch
+    mov al, 12
+    mov bh, 0
+    int 10h
+    inc cx
+    cmp cx, 460
+    jl search_loop
+    ret
+draw_search_message endp
+
+check_item_collection proc
+    push ax
+    push bx
+    push si
+    mov al, byte ptr [py]
+    mov ah, 0
+    mov dx, MAPA_ANCHO
+    mul dx
+    mov dl, byte ptr [px]
+    mov dh, 0
+    add ax, dx
+    mov si, ax
+    cmp si, 300
+    jge no_collection
+    mov al, byte ptr [mapa + si]
+    cmp al, 'G'
+    je collect_gold
+    cmp al, 'C'
+    je collect_crystal
+    cmp al, 'T'
+    je collect_treasure
+    jmp no_collection
+collect_gold:
+    inc byte ptr [gold_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [screen_dirty], 1
+    jmp no_collection
+collect_crystal:
+    inc byte ptr [crystals_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [screen_dirty], 1
+    jmp no_collection
+collect_treasure:
+    inc byte ptr [treasures_count]
+    mov byte ptr [mapa + si], '+'
+    mov byte ptr [screen_dirty], 1
+no_collection:
+    pop si
+    pop bx
+    pop ax
+    ret
+check_item_collection endp
+
+get_key_nowait proc
+    mov byte ptr [tecla], 0
+    mov ah, 01h
+    int 16h
+    jz no_key_available
+    mov ah, 00h
+    int 16h
+    mov byte ptr [tecla], al
+no_key_available:
+    ret
+get_key_nowait endp
+
+move_player proc
+    mov al, byte ptr [tecla]
+    cmp al, 27
+    je salida_juego
+    cmp al, 'w'
+    je mover_arriba
+    cmp al, 'W'
+    je mover_arriba
+    cmp al, 's'
+    je mover_abajo
+    cmp al, 'S'
+    je mover_abajo
+    cmp al, 'a'
+    je mover_izquierda
+    cmp al, 'A'
+    je mover_izquierda
+    cmp al, 'd'
+    je mover_derecha
+    cmp al, 'D'
+    je mover_derecha
+    ret
+salida_juego:
+    mov byte ptr [fin], 1
+    ret
+mover_arriba:
+    cmp byte ptr [py], 0
+    je movimiento_invalido
+    mov byte ptr [player_direction], 1
+    dec byte ptr [py]
+    call validar_movimiento
+    ret
+mover_abajo:
+    cmp byte ptr [py], MAPA_ALTO-1
+    je movimiento_invalido
+    mov byte ptr [player_direction], 0
+    inc byte ptr [py]
+    call validar_movimiento
+    ret
+mover_izquierda:
+    cmp byte ptr [px], 0
+    je movimiento_invalido
+    mov byte ptr [player_direction], 2
+    dec byte ptr [px]
+    call validar_movimiento
+    ret
+mover_derecha:
+    cmp byte ptr [px], MAPA_ANCHO-1
+    je movimiento_invalido
+    mov byte ptr [player_direction], 3
+    inc byte ptr [px]
+    call validar_movimiento
+    ret
+movimiento_invalido:
+    ret
+move_player endp
+
+validar_movimiento proc
+    push ax
+    push bx
+    push si
+    mov al, byte ptr [py]
+    mov ah, 0
+    mov dx, MAPA_ANCHO
+    mul dx
+    mov dl, byte ptr [px]
+    mov dh, 0
+    add ax, dx
+    mov si, ax
+    cmp si, 300
+    jge deshacer_movimiento
+    mov al, byte ptr [mapa + si]
+    cmp al, '#'
+    je deshacer_movimiento
+    cmp al, '~'
+    je deshacer_movimiento
+    cmp al, 'O'
+    je deshacer_movimiento
+    mov byte ptr [screen_dirty], 1
+    jmp fin_validacion
+deshacer_movimiento:
+    mov al, byte ptr [tecla]
+    cmp al, 'w'
+    je deshacer_arriba
+    cmp al, 'W'
+    je deshacer_arriba
+    cmp al, 's'
+    je deshacer_abajo
+    cmp al, 'S'
+    je deshacer_abajo
+    cmp al, 'a'
+    je deshacer_izquierda
+    cmp al, 'A'
+    je deshacer_izquierda
+    cmp al, 'd'
+    je deshacer_derecha
+    cmp al, 'D'
+    je deshacer_derecha
+    jmp fin_validacion
+deshacer_arriba:
+    inc byte ptr [py]
+    jmp fin_validacion
+deshacer_abajo:
+    dec byte ptr [py]
+    jmp fin_validacion
+deshacer_izquierda:
+    inc byte ptr [px]
+    jmp fin_validacion
+deshacer_derecha:
+    dec byte ptr [px]
+    jmp fin_validacion
+fin_validacion:
+    pop si
+    pop bx
+    pop ax
+    ret
+validar_movimiento endp
+
+check_win proc
+    push ax
+    push bx
+    push si
+    mov al, byte ptr [gold_count]
+    cmp al, byte ptr [gold_needed]
+    jl no_ganaste
+    mov al, byte ptr [crystals_count]
+    cmp al, byte ptr [crystals_needed]
+    jl no_ganaste
+    mov al, byte ptr [treasures_count]
+    cmp al, byte ptr [treasures_needed]
+    jl no_ganaste
+    mov al, byte ptr [py]
+    mov ah, 0
+    mov dx, MAPA_ANCHO
+    mul dx
+    mov dl, byte ptr [px]
+    mov dh, 0
+    add ax, dx
+    mov si, ax
+    cmp byte ptr [mapa + si], 'E'
+    jne no_ganaste
+    mov ax, 0003h
+    int 10h
+    mov ah, 02h
+    mov bh, 0
+    mov dh, 8
+    mov dl, 10
+    int 10h
+    mov ah, 09h
+    mov dx, offset mensaje_victoria
+    int 21h
+    mov ah, 02h
+    mov dh, 10
+    mov dl, 15
+    int 10h
+    mov ah, 09h
+    mov dx, offset mensaje_tecnico
+    int 21h
+    mov ah, 02h
+    mov dh, 12
+    mov dl, 12
+    int 10h
+    mov ah, 09h
+    mov dx, offset mensaje_final
+    int 21h
+    mov ah, 07h
+    int 21h
+    mov byte ptr [fin], 1
+no_ganaste:
+    pop si
+    pop bx
+    pop ax
+    ret
+check_win endp
+
+restore_screen proc
+    mov ax, 0003h
+    int 10h
+    mov ah, 01h
+    mov cx, 0607h
+    int 10h
+    ret
+restore_screen endp
+
+end start
